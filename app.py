@@ -9,6 +9,7 @@ Usage:
 """
 import argparse
 import sys
+import pandas as pd
 from typing import Dict, Any
 from fetcher import fetch
 from indicators import ema, rsi, macd, bollinger, atr, support_resistance, volume_strength
@@ -25,8 +26,17 @@ def score_and_recommend(df, capital: float = 50000) -> Dict[str, Any]:
         Dictionary with analysis results and trading recommendation
     """
     try:
+        # Validate inputs
+        if df is None or df.empty:
+            raise ValueError("DataFrame cannot be empty")
+        if capital <= 0:
+            raise ValueError("Capital must be positive")
+        
         close = df['Close']
         price = float(close.iloc[-1])
+        
+        if price <= 0:
+            raise ValueError("Current price must be positive")
         
         # Calculate indicators
         r = float(rsi(close).iloc[-1])
@@ -40,6 +50,12 @@ def score_and_recommend(df, capital: float = 50000) -> Dict[str, Any]:
         atrv = float(atr(df).iloc[-1])
         support, resistance = support_resistance(df)
         vol_strength = volume_strength(df)
+        
+        # Validate indicator values
+        if atrv <= 0:
+            atrv = price * 0.02  # Fallback to 2% of price
+        if pd.isna(ema20) or pd.isna(ema50):
+            raise ValueError("EMA calculation produced NaN values")
         
         # Scoring logic
         score = 50
@@ -115,12 +131,26 @@ def score_and_recommend(df, capital: float = 50000) -> Dict[str, Any]:
         if stop >= price:
             stop = price * 0.95
         
-        risk_amount = capital * 0.02
-        price_diff = abs(price - stop) if price != stop else 1.0
-        position_size = max(0, int(risk_amount / price_diff)) if price_diff > 0 else 0
+        # Validate target is above price
+        if target <= price:
+            target = price * 1.05
         
-        # Risk-Reward ratio
-        rr = (target - price) / (price - stop) if (price - stop) != 0 else None
+        # Ensure stop and target are different to avoid division by zero
+        if abs(target - price) < 0.01:
+            target = price * 1.01
+        if abs(price - stop) < 0.01:
+            stop = price * 0.99
+        
+        risk_amount = capital * 0.02
+        price_diff = abs(price - stop)
+        position_size = max(0, int(risk_amount / price_diff)) if price_diff > 0.01 else 0
+        
+        # Risk-Reward ratio with validation
+        if (price - stop) > 0.001:
+            rr = (target - price) / (price - stop)
+            rr = max(0, min(100, rr))  # Clamp between 0-100
+        else:
+            rr = None
         
         return {
             'symbol': df.attrs.get('symbol', 'N/A'),
